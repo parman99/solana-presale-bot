@@ -1,5 +1,4 @@
 require('dotenv').config();
-
 const TelegramBot = require('node-telegram-bot-api');
 const {
   Connection,
@@ -15,12 +14,10 @@ const {
 const bip39 = require('bip39');
 const { derivePath } = require('ed25519-hd-key');
 
-// === CONFIG ===
-// Ambil dari environment variables
+// === ENV CONFIG ===
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MNEMONIC = process.env.MNEMONIC;
-
-const MINT_ADDRESS = '6jVJVxLeK6HrkLEiyVfUM4WPco5XnzLpiQA6t24zs7Zz';
+const MINT_ADDRESS = process.env.MINT_ADDRESS;
 const TOKEN_DECIMALS = 9;
 const RATE = 100000; // 1 SOL = 100,000 token
 const MIN_SOL = 0.1;
@@ -30,6 +27,7 @@ if (!BOT_TOKEN || !MNEMONIC) {
   process.exit(1);
 }
 
+// === INIT ===
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
 const mint = new PublicKey(MINT_ADDRESS);
@@ -59,31 +57,27 @@ bot.on('message', async (msg) => {
   if (text.startsWith('/')) return;
 
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
-    userData[chatId] = { wallet: text };
+    userData[chatId] = { wallet: text, paid: false };
     bot.sendMessage(chatId, `Wallet kamu tercatat: ${text}\n\nKirim minimal ${MIN_SOL} SOL ke wallet berikut:\n\n${payer.publicKey.toBase58()}\n\nBot akan cek otomatis dan mengirim token.`);
   }
 });
 
-// === CEK PEMBAYARAN ===
-const processedSignatures = new Set(); // simpan transaksi yang sudah diproses
-
-setInterval(async () => {
-  const sigs = await connection.getSignaturesForAddress(payer.publicKey, { limit: 10 });
-
-  for (let sig of sigs) {
-    if (processedSignatures.has(sig.signature)) continue;
-
-    const tx = await connection.getParsedTransaction(sig.signature, 'confirmed');
-    if (!tx?.meta?.postBalances) continue;
+// === LISTEN TRANSAKSI MASUK REAL-TIME ===
+connection.onLogs(payer.publicKey, async (logInfo) => {
+  try {
+    const signature = logInfo.signature;
+    const tx = await connection.getParsedTransaction(signature, 'confirmed');
+    if (!tx?.meta?.postBalances) return;
 
     const senderKey = tx.transaction.message.accountKeys[0].pubkey.toString();
     const receiverKey = tx.transaction.message.accountKeys[1].pubkey.toString();
 
-    if (receiverKey !== payer.publicKey.toBase58()) continue;
+    if (receiverKey === payer.publicKey.toBase58()) {
+      // Cari user
+      const userEntry = Object.entries(userData).find(([_, data]) => data.wallet === senderKey && !data.paid);
+      if (!userEntry) return;
 
-    for (const chatId in userData) {
-      const user = userData[chatId];
-      if (user.paid || user.wallet !== senderKey) continue;
+      const [chatId, user] = userEntry;
 
       const pre = tx.meta.preBalances[1];
       const post = tx.meta.postBalances[1];
@@ -94,12 +88,13 @@ setInterval(async () => {
         const tokenAmount = amountSOL * RATE;
         user.paid = true;
 
-        const wallet = new PublicKey(user.wallet);
+        const userWallet = new PublicKey(user.wallet);
+
         const userTokenAccount = await getOrCreateAssociatedTokenAccount(
           connection,
           payer,
           mint,
-          wallet
+          userWallet
         );
 
         const payerTokenAccount = await getOrCreateAssociatedTokenAccount(
@@ -118,10 +113,10 @@ setInterval(async () => {
           tokenAmount * Math.pow(10, TOKEN_DECIMALS)
         );
 
-        bot.sendMessage(chatId, `Pembayaran ${amountSOL} SOL diterima.\nKamu mendapatkan ${tokenAmount} token. Terima kasih!`);
-
-        processedSignatures.add(sig.signature); // tandai signature ini sudah diproses
+        bot.sendMessage(chatId, `Pembayaran ${amountSOL} SOL diterima!\nKamu mendapatkan ${tokenAmount} token. Terima kasih!`);
       }
     }
+  } catch (err) {
+    console.error('Listener Error:', err.message);
   }
-}, 5000);
+}, 'confirmed');
