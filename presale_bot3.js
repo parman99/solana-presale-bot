@@ -58,6 +58,7 @@ bot.on('message', async (msg) => {
 
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
     userData[chatId] = { wallet: text, paid: false };
+    console.log(`[+] Wallet user ${text} dicatat dari chatId ${chatId}`);
     bot.sendMessage(chatId, `Wallet kamu tercatat: ${text}\n\nKirim minimal ${MIN_SOL} SOL ke wallet berikut:\n\n${payer.publicKey.toBase58()}\n\nBot akan cek otomatis dan mengirim token.`);
   }
 });
@@ -73,9 +74,13 @@ connection.onLogs(payer.publicKey, async (logInfo) => {
     const receiverKey = tx.transaction.message.accountKeys[1].pubkey.toString();
 
     if (receiverKey === payer.publicKey.toBase58()) {
-      // Cari user
+      console.log(`[LOG] Transaksi baru dari ${senderKey} diterima! Signature: ${signature}`);
+
       const userEntry = Object.entries(userData).find(([_, data]) => data.wallet === senderKey && !data.paid);
-      if (!userEntry) return;
+      if (!userEntry) {
+        console.log(`[!] Tidak ditemukan user yang cocok untuk ${senderKey} atau sudah dibayar.`);
+        return;
+      }
 
       const [chatId, user] = userEntry;
 
@@ -83,6 +88,8 @@ connection.onLogs(payer.publicKey, async (logInfo) => {
       const post = tx.meta.postBalances[1];
       const lamports = Math.abs(post - pre);
       const amountSOL = lamports / LAMPORTS_PER_SOL;
+
+      console.log(`[+] Pembayaran sebesar ${amountSOL} SOL diterima dari ${senderKey}`);
 
       if (amountSOL >= MIN_SOL) {
         const tokenAmount = amountSOL * RATE;
@@ -113,7 +120,10 @@ connection.onLogs(payer.publicKey, async (logInfo) => {
           tokenAmount * Math.pow(10, TOKEN_DECIMALS)
         );
 
+        console.log(`[+] Token sebesar ${tokenAmount} berhasil dikirim ke ${user.wallet}`);
         bot.sendMessage(chatId, `Pembayaran ${amountSOL} SOL diterima!\nKamu mendapatkan ${tokenAmount} token. Terima kasih!`);
+      } else {
+        console.log(`[!] Pembayaran dari ${senderKey} kurang dari ${MIN_SOL} SOL.`);
       }
     }
   } catch (err) {
