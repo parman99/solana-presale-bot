@@ -111,14 +111,16 @@ connection.onLogs(payer.publicKey, async (logInfo) => {
           payer.publicKey
         );
 
-        await transfer(
-          connection,
-          payer,
-          payerTokenAccount.address,
-          userTokenAccount.address,
-          payer,
-          tokenAmount * Math.pow(10, TOKEN_DECIMALS)
-        );
+        const tokenAmountRaw = BigInt(Math.floor(tokenAmount * Math.pow(10, TOKEN_DECIMALS)));
+
+await transfer(
+  connection,
+  payer,
+  payerTokenAccount.address,
+  userTokenAccount.address,
+  payer,
+  tokenAmountRaw
+);
 
         console.log(`[+] Token sebesar ${tokenAmount} berhasil dikirim ke ${user.wallet}`);
         bot.sendMessage(chatId, `Pembayaran ${amountSOL} SOL diterima!\nKamu mendapatkan ${tokenAmount} token. Terima kasih!`);
